@@ -1,0 +1,70 @@
+import os
+import json
+import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
+# Persistent directory
+CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma_db")
+os.makedirs(CHROMA_DIR, exist_ok=True)
+
+# Load or create Chroma client
+client = chromadb.PersistentClient(path=CHROMA_DIR)
+
+# Use MiniLM for embeddings
+embedding_func = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+
+# Create or load collection
+collection = client.get_or_create_collection(
+    name="doc_chunks",
+    embedding_function=embedding_func,
+    metadata={"hnsw:space": "cosine"}
+)
+
+# Metadata JSON file
+CHUNK_METADATA_FILE = os.path.join(os.path.dirname(__file__), "chunk_metadata.json")
+if not os.path.exists(CHUNK_METADATA_FILE):
+    with open(CHUNK_METADATA_FILE, "w") as f:
+        json.dump([], f, indent=2)
+
+def add_documents(chunks):
+    """
+    Add document chunks to ChromaDB collection with metadata.
+    """
+    ids = [f"{chunk['doc_id']}_{chunk['page']}_{chunk['paragraph']}" for chunk in chunks]
+    texts = [chunk["chunk_text"] for chunk in chunks]
+    metadatas = [
+        {
+            "doc_id": chunk["doc_id"],
+            "page": chunk["page"],
+            "paragraph": chunk["paragraph"]
+        }
+        for chunk in chunks
+    ]
+
+    collection.add(documents=texts, metadatas=metadatas, ids=ids)
+
+    # Append to JSON file
+    with open(CHUNK_METADATA_FILE, "r", encoding="utf-8") as f:
+        existing = json.load(f)
+
+    existing.extend(chunks)
+    with open(CHUNK_METADATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(existing, f, indent=2, ensure_ascii=False)
+
+def query_top_k(query: str, k: int = 3):
+    """
+    Search top-k relevant chunks from Chroma.
+    """
+    results = collection.query(query_texts=[query], n_results=k)
+
+    matches = []
+    for doc, meta, dist in zip(results["documents"][0], results["metadatas"][0], results["distances"][0]):
+        matches.append({
+            "chunk": doc,
+            "doc_id": meta.get("doc_id", "N/A"),
+            "page": meta.get("page"),
+            "paragraph": meta.get("paragraph"),
+            "score": round(1 - dist, 4)  # cosine similarity (converted from distance)
+        })
+
+    return matches

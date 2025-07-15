@@ -1,0 +1,26 @@
+# --- Web Server ---
+Flask==3.1.1
+flask-cors
+gunicorn
+python-dotenv
+
+# --- Embeddings & Vector Search ---
+chromadb==0.4.24
+sentence-transformers==2.2.2
+scikit-learn
+tqdm
+
+# --- OCR & Document Parsing ---
+pytesseract
+pdfplumber
+pdf2image
+Pillow
+python-docx
+PyMuPDF
+
+# --- LLM APIs ---
+groq==0.7.0
+openai  # optional if you switch back
+
+# --- Utilities ---
+requests
