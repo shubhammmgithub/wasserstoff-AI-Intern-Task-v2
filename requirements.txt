@@ -5,8 +5,9 @@ gunicorn
 python-dotenv
 
 # --- Embeddings & Vector Search ---
-chromadb==0.4.24
-sentence-transformers==2.2.2
+chromadb
+sentence-transformers
+transformers
 scikit-learn
 tqdm
 
@@ -19,8 +20,7 @@ python-docx
 PyMuPDF
 
 # --- LLM APIs ---
-groq==0.7.0
-openai  # optional if you switch back
+groq
 
 # --- Utilities ---
 requests

@@ -1,36 +1,38 @@
+# backend/app/embedder.py
+
 from sentence_transformers import SentenceTransformer
+import numpy as np
 import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from chromadb.utils import embedding_functions
 
-# Load embedding model
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+# Load the embedding model
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Create ChromaDB client and collection
+# Use ChromaDB's default in-memory DB
 chroma_client = chromadb.Client()
-embedding_function = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+chroma_collection = chroma_client.get_or_create_collection(name="document_chunks")
 
-collection = chroma_client.get_or_create_collection(
-    name="document_chunks",
-    embedding_function=embedding_function
-)
+def embed_chunks(texts):
+    embeddings = model.encode(texts, convert_to_numpy=True)
+    return embeddings
 
-def embed_chunks(chunks, doc_id):
-    """
-    Adds chunks to ChromaDB with metadata
-    """
-    chunk_texts = [chunk["chunk_text"] for chunk in chunks]
-    ids = [f"{doc_id}_{i}" for i in range(len(chunks))]
-    metadatas = [{
-        "doc_id": chunk["doc_id"],
-        "page": chunk["page"],
-        "paragraph": chunk["paragraph"]
-    } for chunk in chunks]
+def embed_query(query):
+    return model.encode(query, convert_to_numpy=True)
 
-    collection.add(documents=chunk_texts, metadatas=metadatas, ids=ids)
+def add_to_chroma(doc_id, texts, metadatas):
+    embeddings = embed_chunks(texts)
+    ids = [f"{doc_id}_{i}" for i in range(len(texts))]
+    chroma_collection.add(
+        documents=texts,
+        embeddings=embeddings.tolist(),
+        metadatas=metadatas,
+        ids=ids
+    )
 
-def embed_query(query: str, top_k=3):
-    """
-    Performs a similarity search in ChromaDB
-    """
-    results = collection.query(query_texts=[query], n_results=top_k)
+def search_chroma(query, top_k=3):
+    embedding = embed_query(query)
+    results = chroma_collection.query(
+        query_embeddings=[embedding.tolist()],
+        n_results=top_k
+    )
     return results

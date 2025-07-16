@@ -1,19 +1,8 @@
-"""This is the Flask backend for AI chatbot
-
-It handles:
-- Document upload and preprocessing
-- OCR, chunking, embedding, FAISS indexing
-- Semantic search and citation-based answers
-- Theme extraction using Groq
-
-Initially used OpenAI but switched to Groq due to quota limits.
-"""
+"""Flask backend for AI chatbot using OCR, ChromaDB & Groq."""
 
 import os
+os.environ["CHROMA_TELEMETRY"] = "False"
 import json
-import openai
-import faiss
-import numpy as np
 import csv
 from flask import Flask, request, jsonify, send_file
 from werkzeug.utils import secure_filename
@@ -22,28 +11,24 @@ from io import StringIO, BytesIO
 
 from .ocr_utils import extract_text_from_file
 from .text_utils import chunk_text
-from .embedder import embed_chunks, build_faiss_index, embed_query
+from .embedder import add_to_chroma, search_chroma
 from .groq_utils import chat_with_groq
 
 # Load environment variables
 load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Define paths
+# Paths
 BASE_DIR = os.path.dirname(__file__)
 UPLOAD_FOLDER = os.path.join(BASE_DIR, '..', '..', 'docs')
-INDEX_FILE = os.path.join(BASE_DIR, 'faiss_index.index')
 CHUNKS_FILE = os.path.join(BASE_DIR, 'chunk_metadata.json')
 CHUNK_DATA_FILE = os.path.join(BASE_DIR, 'chunk_data.json')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Globals
-faiss_index = None
 stored_chunks = []
-embedding_dim = 1536
 last_search_result = {}
 
-# Create Flask app
+# Flask app
 app = Flask(__name__)
 
 @app.route("/")
@@ -52,7 +37,7 @@ def home():
 
 @app.route("/upload", methods=["POST"])
 def upload_file():
-    global faiss_index, stored_chunks, embedding_dim
+    global stored_chunks
 
     if 'file' not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
@@ -65,49 +50,39 @@ def upload_file():
     text = extract_text_from_file(filepath)
     new_chunks = chunk_text(text, doc_id=filename)
     new_texts = [chunk["chunk_text"] for chunk in new_chunks]
-    new_embeddings = embed_chunks(new_texts)
 
-    if faiss_index is None:
-        faiss_index = build_faiss_index(new_embeddings)
-        stored_chunks = new_chunks
-    else:
-        faiss_index.add(new_embeddings.astype("float32"))
-        stored_chunks.extend(new_chunks)
+    # Store in Chroma
+    add_to_chroma(doc_id=filename, texts=new_texts, metadatas=new_chunks)
+    stored_chunks.extend(new_chunks)
 
-    faiss.write_index(faiss_index, INDEX_FILE)
     with open(CHUNKS_FILE, "w", encoding="utf-8") as f:
         json.dump(stored_chunks, f, ensure_ascii=False, indent=2)
 
-    chunk_data = []
-    for chunk in new_chunks:
-        chunk_data.append({
-            "doc_id": chunk.get("doc_id"),
-            "page": chunk.get("page"),
-            "paragraph": chunk.get("paragraph"),
-            "text": chunk.get("chunk_text")
-        })
+    # Save text + metadata
+    chunk_data = [{
+        "doc_id": c.get("doc_id"),
+        "page": c.get("page"),
+        "paragraph": c.get("paragraph"),
+        "text": c.get("chunk_text")
+    } for c in new_chunks]
 
     if os.path.exists(CHUNK_DATA_FILE):
         with open(CHUNK_DATA_FILE, "r", encoding="utf-8") as f:
-            existing_data = json.load(f)
-        chunk_data = existing_data + chunk_data
+            chunk_data = json.load(f) + chunk_data
 
     with open(CHUNK_DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(chunk_data, f, ensure_ascii=False, indent=2)
-
-    embedding_dim = new_embeddings.shape[1]
 
     return jsonify({
         "filename": filename,
         "extracted_text_snippet": text[:300],
         "total_chunks": len(new_chunks),
-        "embedding_dimension": embedding_dim,
-        "status": "✅ Document embedded and FAISS index updated"
+        "status": "✅ Document embedded and ChromaDB index updated"
     })
 
 @app.route("/search", methods=["POST"])
 def search():
-    global faiss_index, stored_chunks, last_search_result
+    global last_search_result
 
     data = request.get_json()
     query = data.get("query", "")
@@ -115,32 +90,28 @@ def search():
 
     if not query:
         return jsonify({"error": "No query provided"}), 400
-    if faiss_index is None or not stored_chunks:
+    if not stored_chunks:
         return jsonify({"error": "Upload a document first."}), 400
 
-    query_vector = embed_query(query)
-    if query_vector.ndim == 1:
-        query_vector = query_vector.reshape(1, -1).astype("float32")
-
-    D, I = faiss_index.search(query_vector, top_k)
+    results_raw = search_chroma(query, top_k=top_k)
 
     results = []
-    for idx, score in zip(I[0], D[0]):
-        chunk = stored_chunks[idx]
+    for doc, score in zip(results_raw["documents"][0], results_raw["distances"][0]):
+        metadata = doc["metadata"]
         results.append({
             "score": round(float(score), 4),
-            "chunk": chunk["chunk_text"],
-            "doc_id": chunk.get("doc_id", "N/A"),
-            "page": chunk.get("page"),
-            "paragraph": chunk.get("paragraph")
+            "chunk": doc["content"],
+            "doc_id": metadata.get("doc_id", "N/A"),
+            "page": metadata.get("page"),
+            "paragraph": metadata.get("paragraph")
         })
 
     context_chunks = "\n\n".join([
-        f"[{res['doc_id']}, Page {res.get('page')}, Para {res.get('paragraph')}]: {res['chunk']}"
-        for res in results
+        f"[{r['doc_id']}, Page {r['page']}, Para {r['paragraph']}]: {r['chunk']}"
+        for r in results
     ])
 
-    synthesis_prompt = f"""Hey GROQ, You are an expert summarizer. Based on the following top relevant document excerpts, identify the main themes or ideas and synthesize a short answer and please don't give irrelevant answer.
+    prompt = f"""Hey GROQ, You are an expert summarizer. Based on the following top relevant document excerpts, identify the main themes or ideas and synthesize a short answer and please don't give irrelevant answer.
 
 Always cite sources using the format: [DocID, Page, Para].
 
@@ -149,10 +120,9 @@ Excerpts:
 
 Synthesized Answer:"""
 
-    synthesized_answer = chat_with_groq(synthesis_prompt)
+    synthesized_answer = chat_with_groq(prompt)
 
-    last_search_result["query"] = query
-    last_search_result["results"] = results
+    last_search_result = {"query": query, "results": results}
 
     return jsonify({
         "query": query,
@@ -162,8 +132,6 @@ Synthesized Answer:"""
 
 @app.route("/themes", methods=["POST"])
 def extract_themes():
-    global stored_chunks
-
     if not stored_chunks:
         return jsonify({"error": "No documents uploaded."}), 400
 
@@ -175,11 +143,10 @@ def extract_themes():
     theme_results = {}
 
     for doc_id, chunks in grouped.items():
-        limited_chunks = chunks[:30]
-
-        chunk_text = "\n\n".join([
-            f"[{chunk.get('doc_id')}, Page {chunk.get('page')}, Para {chunk.get('paragraph')}]: {chunk['chunk_text']}"
-            for chunk in limited_chunks
+        limited = chunks[:30]
+        excerpt = "\n\n".join([
+            f"[{c.get('doc_id')}, Page {c.get('page')}, Para {c.get('paragraph')}]: {c['chunk_text']}"
+            for c in limited
         ])
 
         prompt = f"""Hey Groq,You are a theme summarization expert. Analyze the following document excerpts and summarize the common themes, patterns, or recurring ideas from them and give the most relevant answer.
@@ -187,16 +154,16 @@ def extract_themes():
 Cite supporting passages by mentioning DocID, Page, and Paragraph wherever relevant.
 
 Excerpts:
-{chunk_text}
+{excerpt}
 
 Theme Summary:"""
 
         try:
-            theme_summary = chat_with_groq(prompt)
+            summary = chat_with_groq(prompt)
         except Exception as e:
-            theme_summary = f"Groq API error: {str(e)}"
+            summary = f"Groq API error: {str(e)}"
 
-        theme_results[doc_id] = {"summary": theme_summary}
+        theme_results[doc_id] = {"summary": summary}
 
     return jsonify({
         "themes_by_document": theme_results,
@@ -221,6 +188,7 @@ def download_results():
             writer.writerow(item)
         output.seek(0)
         return send_file(BytesIO(output.getvalue().encode()), mimetype="text/csv", as_attachment=True, download_name="search_results.csv")
+
     else:
         content = f"Query: {query}\n\nResults:\n"
         for res in results:
@@ -228,15 +196,13 @@ def download_results():
         return send_file(BytesIO(content.encode()), mimetype="text/plain", as_attachment=True, download_name="search_results.txt")
 
 def load_existing_index_and_chunks():
-    global faiss_index, stored_chunks
-
-    if os.path.exists(INDEX_FILE) and os.path.exists(CHUNKS_FILE):
-        print("ℹ️ Loading previous FAISS index and chunk metadata...")
-        faiss_index = faiss.read_index(INDEX_FILE)
+    global stored_chunks
+    if os.path.exists(CHUNKS_FILE):
+        print("ℹ️ Loading previous chunk metadata...")
         with open(CHUNKS_FILE, "r", encoding="utf-8") as f:
             stored_chunks = json.load(f)
     else:
-        print("ℹ️ No previous index found, starting fresh.")
+        print("ℹ️ No previous chunk metadata found. Starting fresh.")
 
 if __name__ == "__main__":
     load_existing_index_and_chunks()
