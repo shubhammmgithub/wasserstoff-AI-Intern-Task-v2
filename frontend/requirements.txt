@@ -1,6 +1,4 @@
-streamlit
+streamlit>=1.25.0
 requests
 pandas
-
-
-#
+python-dotenv  # For environment variables (optional but recommended)
