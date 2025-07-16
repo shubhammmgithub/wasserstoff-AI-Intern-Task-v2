@@ -1,0 +1,13 @@
+# Backend
+backend/chroma_index/
+backend/instance/
+
+# Frontend
+frontend/.streamlit/
+frontend/__pycache__/
+
+# Global
+.env
+*.pyc
+venv/
+.DS_Store
