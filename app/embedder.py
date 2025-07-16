@@ -1,38 +1,34 @@
-# backend/app/embedder.py
+# embedder.py (ChromaDB v0.5+ compatible)
 
 from sentence_transformers import SentenceTransformer
-import numpy as np
 import chromadb
-from chromadb.utils import embedding_functions
 
-# Load the embedding model
+# Initialize model
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Use ChromaDB's default in-memory DB
-chroma_client = chromadb.Client()
-chroma_collection = chroma_client.get_or_create_collection(name="document_chunks")
+# ✅ Correct new client init (v0.5+)
+chroma_client = chromadb.PersistentClient(path="./chroma_index")
+collection = chroma_client.get_or_create_collection(name="document_chunks")
 
-def embed_chunks(texts):
-    embeddings = model.encode(texts, convert_to_numpy=True)
-    return embeddings
-
-def embed_query(query):
-    return model.encode(query, convert_to_numpy=True)
-
+# Add chunks to Chroma
 def add_to_chroma(doc_id, texts, metadatas):
-    embeddings = embed_chunks(texts)
-    ids = [f"{doc_id}_{i}" for i in range(len(texts))]
-    chroma_collection.add(
-        documents=texts,
-        embeddings=embeddings.tolist(),
-        metadatas=metadatas,
-        ids=ids
-    )
+    ids = [f"{doc_id}_chunk_{i}" for i in range(len(texts))]
+    embeddings = model.encode(texts, normalize_embeddings=True).tolist()
+    collection.add(documents=texts, embeddings=embeddings, metadatas=metadatas, ids=ids)
 
+# Search
 def search_chroma(query, top_k=3):
-    embedding = embed_query(query)
-    results = chroma_collection.query(
-        query_embeddings=[embedding.tolist()],
+    query_embedding = model.encode([query], normalize_embeddings=True)[0].tolist()
+    results = collection.query(
+        query_embeddings=[query_embedding],
         n_results=top_k
     )
-    return results
+    matched = []
+    for i in range(len(results["ids"][0])):
+        matched.append({
+            "id": results["ids"][0][i],
+            "content": results["documents"][0][i],
+            "metadata": results["metadatas"][0][i],
+            "score": results["distances"][0][i]
+        })
+    return matched

@@ -2,6 +2,7 @@
 
 import os
 os.environ["CHROMA_TELEMETRY"] = "False"
+
 import json
 import csv
 from flask import Flask, request, jsonify, send_file
@@ -31,9 +32,11 @@ last_search_result = {}
 # Flask app
 app = Flask(__name__)
 
+
 @app.route("/")
 def home():
     return "✅ Wasserstoff Document AI Server is Running"
+
 
 @app.route("/upload", methods=["POST"])
 def upload_file():
@@ -51,14 +54,12 @@ def upload_file():
     new_chunks = chunk_text(text, doc_id=filename)
     new_texts = [chunk["chunk_text"] for chunk in new_chunks]
 
-    # Store in Chroma
     add_to_chroma(doc_id=filename, texts=new_texts, metadatas=new_chunks)
     stored_chunks.extend(new_chunks)
 
     with open(CHUNKS_FILE, "w", encoding="utf-8") as f:
         json.dump(stored_chunks, f, ensure_ascii=False, indent=2)
 
-    # Save text + metadata
     chunk_data = [{
         "doc_id": c.get("doc_id"),
         "page": c.get("page"),
@@ -80,6 +81,7 @@ def upload_file():
         "status": "✅ Document embedded and ChromaDB index updated"
     })
 
+
 @app.route("/search", methods=["POST"])
 def search():
     global last_search_result
@@ -93,14 +95,17 @@ def search():
     if not stored_chunks:
         return jsonify({"error": "Upload a document first."}), 400
 
-    results_raw = search_chroma(query, top_k=top_k)
+    try:
+        matched = search_chroma(query, top_k=top_k)
+    except Exception as e:
+        return jsonify({"error": f"Search failed: {str(e)}"}), 500
 
     results = []
-    for doc, score in zip(results_raw["documents"][0], results_raw["distances"][0]):
-        metadata = doc["metadata"]
+    for item in matched:
+        metadata = item["metadata"]
         results.append({
-            "score": round(float(score), 4),
-            "chunk": doc["content"],
+            "score": round(float(item["score"]), 4),
+            "chunk": item["content"],
             "doc_id": metadata.get("doc_id", "N/A"),
             "page": metadata.get("page"),
             "paragraph": metadata.get("paragraph")
@@ -120,7 +125,10 @@ Excerpts:
 
 Synthesized Answer:"""
 
-    synthesized_answer = chat_with_groq(prompt)
+    try:
+        synthesized_answer = chat_with_groq(prompt)
+    except Exception as e:
+        synthesized_answer = f"❌ Error communicating with Groq: {str(e)}"
 
     last_search_result = {"query": query, "results": results}
 
@@ -130,44 +138,71 @@ Synthesized Answer:"""
         "synthesized_answer": synthesized_answer
     })
 
+
 @app.route("/themes", methods=["POST"])
-def extract_themes():
-    if not stored_chunks:
-        return jsonify({"error": "No documents uploaded."}), 400
+def generate_theme_summary():
+    all_chunks = load_chunk_metadata()  # from persistent JSON
+    if not all_chunks:
+        return jsonify({"error": "No chunk metadata found."}), 400
 
-    grouped = {}
-    for chunk in stored_chunks:
-        doc_id = chunk.get("doc_id", "Unknown")
-        grouped.setdefault(doc_id, []).append(chunk)
+    doc_themes = {}
+    all_chunk_texts = []
 
-    theme_results = {}
+    for doc_id, chunks in all_chunks.items():
+        print(f"\n[Theme] Processing: {doc_id}")
+        
+        if not chunks:
+            print(f"❌ No chunks found for {doc_id}")
+            doc_themes[doc_id] = {"error": "No chunks found"}
+            continue
 
-    for doc_id, chunks in grouped.items():
-        limited = chunks[:30]
-        excerpt = "\n\n".join([
-            f"[{c.get('doc_id')}, Page {c.get('page')}, Para {c.get('paragraph')}]: {c['chunk_text']}"
-            for c in limited
-        ])
-
-        prompt = f"""Hey Groq,You are a theme summarization expert. Analyze the following document excerpts and summarize the common themes, patterns, or recurring ideas from them and give the most relevant answer.
-
-Cite supporting passages by mentioning DocID, Page, and Paragraph wherever relevant.
-
-Excerpts:
-{excerpt}
-
-Theme Summary:"""
+        chunk_texts = [chunk['text'] for chunk in chunks if chunk.get('text', '').strip()]
+        if not chunk_texts:
+            print(f"❌ No valid text in chunks for {doc_id}")
+            doc_themes[doc_id] = {"error": "No valid text found in document"}
+            continue
 
         try:
-            summary = chat_with_groq(prompt)
-        except Exception as e:
-            summary = f"Groq API error: {str(e)}"
+            theme_prompt = "Identify the key themes or main ideas from the following document:"
+            combined_text = "\n".join(chunk_texts[:10])  # Optional: limit for speed
+            print(f"[Theme] Extracting from {len(chunk_texts)} chunks...")
 
-        theme_results[doc_id] = {"summary": summary}
+            response = groq_client.chat.completions.create(
+                model="llama3-8b-8192",
+                messages=[
+                    {"role": "system", "content": theme_prompt},
+                    {"role": "user", "content": combined_text}
+                ]
+            )
+            summary = response.choices[0].message.content.strip()
+            doc_themes[doc_id] = {"theme_summary": summary}
+            all_chunk_texts.extend(chunk_texts)
+
+        except Exception as e:
+            print(f"❌ Error summarizing {doc_id}: {e}")
+            doc_themes[doc_id] = {"error": f"LLM error: {str(e)}"}
+
+    if not all_chunk_texts:
+        return jsonify({"error": "No valid chunk text found across documents."}), 400
+
+    # Overall theme synthesis
+    try:
+        global_prompt = "Identify the most important themes that are common across all these documents:"
+        global_input = "\n".join(all_chunk_texts[:30])  # Optional: limit
+        global_response = groq_client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[
+                {"role": "system", "content": global_prompt},
+                {"role": "user", "content": global_input}
+            ]
+        )
+        theme_summary = global_response.choices[0].message.content.strip()
+    except Exception as e:
+        theme_summary = f"Error generating overall summary: {str(e)}"
 
     return jsonify({
-        "themes_by_document": theme_results,
-        "total_documents": len(grouped)
+        "theme_summary": theme_summary,
+        "themes_by_document": doc_themes
     })
 
 @app.route("/download_results", methods=["GET"])
@@ -195,6 +230,7 @@ def download_results():
             content += f"\n---\nScore: {res['score']}\nDoc: {res['doc_id']} | Page: {res['page']} | Paragraph: {res['paragraph']}\n\n{res['chunk']}\n"
         return send_file(BytesIO(content.encode()), mimetype="text/plain", as_attachment=True, download_name="search_results.txt")
 
+
 def load_existing_index_and_chunks():
     global stored_chunks
     if os.path.exists(CHUNKS_FILE):
@@ -203,6 +239,7 @@ def load_existing_index_and_chunks():
             stored_chunks = json.load(f)
     else:
         print("ℹ️ No previous chunk metadata found. Starting fresh.")
+
 
 if __name__ == "__main__":
     load_existing_index_and_chunks()
