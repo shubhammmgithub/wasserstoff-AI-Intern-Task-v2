@@ -1,13 +1,24 @@
-# Backend
-backend/chroma_index/
-backend/instance/
-
-# Frontend
-frontend/.streamlit/
-frontend/__pycache__/
-
-# Global
-.env
-*.pyc
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
 venv/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# System
 .DS_Store
+Thumbs.db
+
+# ChromaDB (backend specific)
+backend/chroma_index/
+
+# Explicitly INCLUDE these (override ignores)
+!frontend/requirements.txt
+!frontend/streamlit_app.py
