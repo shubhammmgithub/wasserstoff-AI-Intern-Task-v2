@@ -50,7 +50,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Secure Gunicorn configuration
+# Secure Gunicorn configuration n
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", \
     "--workers", "1", \
     "--threads", "2", \
@@ -60,3 +60,4 @@ CMD ["gunicorn", "--bind", "0.0.0.0:8000", \
     "--error-logfile", "-", \
     "--preload", \
     "app.api_server:app"]
+    
