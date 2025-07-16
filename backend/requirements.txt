@@ -1,0 +1,26 @@
+# --- Web Server ---
+Flask==3.1.1
+flask-cors
+gunicorn
+python-dotenv
+
+# --- Embeddings & Vector Search ---
+chromadb
+sentence-transformers
+transformers
+scikit-learn
+tqdm
+
+# --- OCR & Document Parsing ---
+pytesseract
+pdfplumber
+pdf2image
+Pillow
+python-docx
+PyMuPDF
+
+# --- LLM APIs ---
+groq
+
+# --- Utilities ---
+requests
