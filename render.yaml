@@ -1,0 +1,15 @@
+# render.yaml
+services:
+  - type: web
+    name: flask-ai-app
+    env: docker
+    plan: free
+    dockerfilePath: Dockerfile  # Points to your existing file
+    healthCheckPath: /health   # Add a simple route to your Flask app
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: PYTHONUNBUFFERED
+        value: 1
+    resources:
+      memoryLimitMb: 512       # Force strict limit
