@@ -23,8 +23,8 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 COPY backend/requirements.txt .
 COPY backend/app ./app
-COPY backend/docs ./docs
-COPY backend/chunk_*.json ./app/
+#COPY backend/docs ./docs
+COPY backend/chunk_data.json ./app/
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
