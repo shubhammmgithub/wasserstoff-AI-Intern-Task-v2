@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 venv/
+# Virtual environments
+frontend/venv/
+
 
 # Environment
 .env
@@ -19,6 +22,3 @@ Thumbs.db
 # ChromaDB (backend specific)
 backend/chroma_index/
 
-# Explicitly INCLUDE these (override ignores)
-!frontend/requirements.txt
-!frontend/streamlit_app.py
