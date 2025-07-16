@@ -205,3 +205,5 @@ if st.session_state.get("search_result"):
                 file_name=f"results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
                 mime="text/plain"
             )
+            
+            #
